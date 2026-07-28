@@ -33,22 +33,27 @@ exports.registerUser = async (req, res) => {
       return res.status(400).json({ message: 'Name must be at least 2 characters long' });
     }
 
-    const userExists = await User.findOne({ email: email.toLowerCase() });
+    let user = await User.findOne({ email: email.toLowerCase() });
 
-    if (userExists) {
-      return res.status(400).json({ message: 'Email already registered. Please try logging in.' });
+    if (user) {
+      if (user.isVerified) {
+        return res.status(400).json({ message: 'Email already registered. Please try logging in.' });
+      }
+      // Re-use unverified user record and generate a new OTP
+      user.name = name.trim();
+      user.password = password;
+      user.otp = otp;
+      user.otpExpiry = otpExpiry;
+      await user.save();
+    } else {
+      user = await User.create({
+        name: name.trim(),
+        email: email.toLowerCase(),
+        password,
+        otp,
+        otpExpiry
+      });
     }
-
-    const otp = generateOTP();
-    const otpExpiry = Date.now() + 10 * 60 * 1000; // 10 minutes
-
-    const user = await User.create({
-      name: name.trim(),
-      email: email.toLowerCase(),
-      password,
-      otp,
-      otpExpiry
-    });
 
     // Send OTP email asynchronously so HTTP response is instant
     const message = `Your OTP for verification is: ${otp}\n\nThis OTP is valid for 10 minutes.`;
