@@ -37,18 +37,21 @@ app.use('/api/auth', authRoutes);
 app.use('/api/ai', aiRoutes);
 
 // Absolute path to client build folder
+const fs = require('fs');
 const __dirnamePath = path.resolve();
 const clientBuildPath = path.join(__dirnamePath, '..', 'client', 'dist');
 
-// Serve static files
-app.use(express.static(clientBuildPath));
+// Serve static files if frontend build directory exists
+if (fs.existsSync(clientBuildPath)) {
+    app.use(express.static(clientBuildPath));
 
-// For any route not starting with /api, send index.html
-app.get('*', (req, res) => {
-    if (!req.path.startsWith('/api')) {
-        res.sendFile(path.join(clientBuildPath, 'index.html'));
-    }
-});
+    // For any route not starting with /api, send index.html
+    app.get('*', (req, res) => {
+        if (!req.path.startsWith('/api')) {
+            res.sendFile(path.join(clientBuildPath, 'index.html'));
+        }
+    });
+}
 
 
 app.use((err, req, res, next) => {
