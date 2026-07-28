@@ -24,8 +24,25 @@ connectDB();
 
 const app = express();
 
+// Dynamic & resilient CORS configuration
 app.use(cors({
-    origin: process.env.FRONTEND_URL || true,
+    origin: (origin, callback) => {
+        // Allow non-browser requests (Postman, curl, server-to-server)
+        if (!origin) return callback(null, true);
+
+        const cleanOrigin = origin.replace(/\/$/, '');
+        const configuredFrontend = process.env.FRONTEND_URL ? process.env.FRONTEND_URL.replace(/\/$/, '') : null;
+
+        if (
+            cleanOrigin.endsWith('.vercel.app') ||
+            cleanOrigin.includes('localhost') ||
+            (configuredFrontend && cleanOrigin === configuredFrontend)
+        ) {
+            return callback(null, origin);
+        }
+
+        return callback(null, origin);
+    },
     credentials: true
 }));
 
