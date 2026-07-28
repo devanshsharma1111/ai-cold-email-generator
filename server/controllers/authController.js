@@ -33,6 +33,9 @@ exports.registerUser = async (req, res) => {
       return res.status(400).json({ message: 'Name must be at least 2 characters long' });
     }
 
+    const otp = generateOTP();
+    const otpExpiry = Date.now() + 10 * 60 * 1000; // 10 minutes
+
     let user = await User.findOne({ email: email.toLowerCase() });
 
     if (user) {
