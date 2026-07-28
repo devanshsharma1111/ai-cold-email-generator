@@ -7,19 +7,27 @@ const sendEmail = async (options) => {
         }
 
         const transporter = nodemailer.createTransport({
-            service: 'gmail',
+            host: 'smtp.gmail.com',
+            port: 465,
+            secure: true,
             auth: {
                 user: process.env.EMAIL_USER,
                 pass: process.env.EMAIL_PASS,
             },
+            connectionTimeout: 8000,
+            greetingTimeout: 8000,
+            socketTimeout: 10000
         });
 
         const mailOptions = {
-            from: process.env.EMAIL_USER,
+            from: `"AI Cold Email Generator" <${process.env.EMAIL_USER}>`,
             to: options.email,
             subject: options.subject,
             text: options.message,
-            html: `<p>${options.message}</p>`,
+            html: `<div style="font-family: Arial, sans-serif; padding: 20px; line-height: 1.6;">
+                     <h2>Email Verification</h2>
+                     <p>${options.message}</p>
+                   </div>`,
         };
 
         const info = await transporter.sendMail(mailOptions);
