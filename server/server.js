@@ -36,6 +36,11 @@ app.use(express.urlencoded({ extended: true }));
 app.use('/api/auth', authRoutes);
 app.use('/api/ai', aiRoutes);
 
+// Root route health check
+app.get('/', (req, res) => {
+    res.json({ status: 'OK', message: 'AI Cold Email Generator API is running' });
+});
+
 // Absolute path to client build folder
 const fs = require('fs');
 const __dirnamePath = path.resolve();
