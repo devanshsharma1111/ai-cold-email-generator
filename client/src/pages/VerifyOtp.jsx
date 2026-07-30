@@ -7,6 +7,8 @@ import { useAuth } from '../context/AuthContext';
 const VerifyOtp = () => {
     const [otp, setOtp] = useState('');
     const [loading, setLoading] = useState(false);
+    const [resending, setResending] = useState(false);
+    const [cooldown, setCooldown] = useState(0);
     const location = useLocation();
     const navigate = useNavigate();
     const { login } = useAuth();
@@ -31,6 +33,29 @@ const VerifyOtp = () => {
             toast.error(error.response?.data?.message || 'Verification failed');
         } finally {
             setLoading(false);
+        }
+    };
+
+    const handleResend = async () => {
+        if (resending || cooldown > 0) return;
+        setResending(true);
+        try {
+            const { data } = await api.post('/auth/resend-otp', { userId, email });
+            toast.success(data.message || 'New OTP sent to your email!');
+            setCooldown(30);
+            const timer = setInterval(() => {
+                setCooldown((prev) => {
+                    if (prev <= 1) {
+                        clearInterval(timer);
+                        return 0;
+                    }
+                    return prev - 1;
+                });
+            }, 1000);
+        } catch (error) {
+            toast.error(error.response?.data?.message || 'Failed to resend OTP');
+        } finally {
+            setResending(false);
         }
     };
 
@@ -67,6 +92,21 @@ const VerifyOtp = () => {
                             {loading ? 'Verifying...' : 'Verify Email'}
                         </button>
                     </form>
+
+                    <div className="mt-6 text-center">
+                        <button
+                            type="button"
+                            onClick={handleResend}
+                            disabled={resending || cooldown > 0}
+                            className="text-sm font-medium text-primary-600 hover:text-primary-500 disabled:text-gray-400 disabled:cursor-not-allowed"
+                        >
+                            {resending
+                                ? 'Sending new code...'
+                                : cooldown > 0
+                                ? `Resend code in ${cooldown}s`
+                                : "Didn't receive the code? Resend"}
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>

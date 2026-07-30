@@ -18,7 +18,12 @@ const Signup = () => {
             toast.success(data.message);
             navigate('/verify-otp', { state: { userId: data.userId, email } });
         } catch (error) {
-            toast.error(error.response?.data?.message || 'Registration failed');
+            const errorMessage = error.response?.data?.message || 'Registration failed';
+            toast.error(errorMessage);
+            // If account was created but email sending failed, allow navigating to verification page to resend
+            if (error.response?.data?.userId) {
+                navigate('/verify-otp', { state: { userId: error.response.data.userId, email } });
+            }
         } finally {
             setLoading(false);
         }
