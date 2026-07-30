@@ -11,12 +11,16 @@ const aiRoutes = require('./routes/aiRoutes');
 dotenv.config();
 
 // Validate required environment variables
-const requiredEnvVars = ['MONGODB_URI', 'JWT_SECRET', 'GROQ_API_KEY', 'EMAIL_USER', 'EMAIL_PASS'];
+const requiredEnvVars = ['MONGODB_URI', 'JWT_SECRET', 'GROQ_API_KEY'];
 const missingEnvVars = requiredEnvVars.filter(envVar => !process.env[envVar]);
 
 if (missingEnvVars.length > 0) {
     console.error(`Missing required environment variables: ${missingEnvVars.join(', ')}`);
     process.exit(1);
+}
+
+if (!process.env.RESEND_API_KEY && (!process.env.EMAIL_USER || !process.env.EMAIL_PASS)) {
+    console.warn('⚠️ Warning: Neither RESEND_API_KEY nor EMAIL_USER/EMAIL_PASS configured. Email sending may fail.');
 }
 
 // Connect to MongoDB
