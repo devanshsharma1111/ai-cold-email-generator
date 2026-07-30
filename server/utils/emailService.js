@@ -14,8 +14,8 @@ const sendEmail = async (options) => {
     try {
         const user = process.env.EMAIL_USER;
         const pass = process.env.EMAIL_PASS;
-        const resendKey = process.env.RESEND_API_KEY;
         const brevoKey = process.env.BREVO_API_KEY;
+        const resendKey = process.env.RESEND_API_KEY;
         const sendgridKey = process.env.SENDGRID_API_KEY;
 
         const otpMatch = options.message.match(/\d{6}/);
@@ -36,39 +36,18 @@ const sendEmail = async (options) => {
             </div>
         `;
 
-        // 1. Resend HTTP API (Best for Vercel - uses HTTPS Port 443, never times out)
-        if (resendKey) {
-            try {
-                const res = await fetch('https://api.resend.com/emails', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${resendKey}`
-                    },
-                    body: JSON.stringify({
-                        from: 'AI Cold Email Generator <onboarding@resend.dev>',
-                        to: [options.email],
-                        subject: options.subject,
-                        html: formattedHtml,
-                        text: options.message
-                    })
-                });
-
-                const data = await res.json();
-                if (res.ok) {
-                    console.log('✅ Email sent via Resend HTTP API:', data.id);
-                    return { success: true, message: 'Email sent successfully via Resend API', messageId: data.id };
-                } else {
-                    console.warn('⚠️ Resend HTTP API error:', data);
-                }
-            } catch (err) {
-                console.warn('⚠️ Resend fetch failed:', err.message);
-            }
-        }
-
-        // 2. Brevo HTTP API
+        // ─────────────────────────────────────────────────────────────────────
+        // 1. BREVO — PRIMARY (recommended)
+        //    ✅ Send FROM your Gmail address (verify it once at https://app.brevo.com/senders)
+        //    ✅ Delivers to ANY recipient email — no domain ownership needed
+        //    ✅ 300 emails/day free, works on Vercel (pure HTTPS, no SMTP sockets)
+        //    ACTION NEEDED: Go to https://app.brevo.com/senders → Add dev.1092004@gmail.com → click the verify link sent to that Gmail
+        // ─────────────────────────────────────────────────────────────────────
         if (brevoKey) {
             try {
+                const senderEmail = user || 'no-reply@aicoldemail.com';
+                console.log('📧 [Brevo] Sending. From:', senderEmail, '→ To:', options.email);
+
                 const res = await fetch('https://api.brevo.com/v3/smtp/email', {
                     method: 'POST',
                     headers: {
@@ -76,7 +55,7 @@ const sendEmail = async (options) => {
                         'api-key': brevoKey
                     },
                     body: JSON.stringify({
-                        sender: { name: 'AI Cold Email Generator', email: user || 'no-reply@aicoldemail.com' },
+                        sender: { name: 'AI Cold Email Generator', email: senderEmail },
                         to: [{ email: options.email }],
                         subject: options.subject,
                         htmlContent: formattedHtml,
@@ -86,19 +65,80 @@ const sendEmail = async (options) => {
 
                 const data = await res.json();
                 if (res.ok) {
-                    console.log('✅ Email sent via Brevo HTTP API:', data.messageId);
-                    return { success: true, message: 'Email sent successfully via Brevo API', messageId: data.messageId };
+                    console.log('✅ [Brevo] Email sent! messageId:', data.messageId);
+                    return { success: true, message: 'Email sent successfully via Brevo', messageId: data.messageId };
                 } else {
-                    console.warn('⚠️ Brevo HTTP API error:', data);
+                    console.warn('⚠️ [Brevo] Error (status ' + res.status + '):', JSON.stringify(data, null, 2));
+                    if (data.code === 'unauthorized') {
+                        console.warn('   → Fix: Invalid API key. Check BREVO_API_KEY in .env and Vercel env vars.');
+                    } else if (data.message && data.message.toLowerCase().includes('sender')) {
+                        console.warn('   → Fix: Sender not verified. Go to https://app.brevo.com/senders and verify: ' + senderEmail);
+                    }
+                    // Fall through to next provider
                 }
             } catch (err) {
-                console.warn('⚠️ Brevo fetch failed:', err.message);
+                console.warn('⚠️ [Brevo] Fetch failed:', err.message);
             }
         }
 
-        // 3. SendGrid HTTP API
+        // ─────────────────────────────────────────────────────────────────────
+        // 2. RESEND — FALLBACK
+        //    ⚠️  Cannot use @gmail.com as sender (Resend requires you to own the domain)
+        //    ⚠️  Default test sender (onboarding@resend.dev) only delivers to your Resend account email
+        //    ✅  Works on Vercel (pure HTTPS)
+        //    For any-recipient production delivery: verify domain at https://resend.com/domains
+        //    then set RESEND_FROM=no-reply@yourdomain.com in .env + Vercel env vars
+        // ─────────────────────────────────────────────────────────────────────
+        if (resendKey) {
+            try {
+                const resendFrom = process.env.RESEND_FROM;
+                const fromEmail = resendFrom
+                    ? `AI Cold Email Generator <${resendFrom}>`
+                    : 'AI Cold Email Generator <onboarding@resend.dev>';
+
+                console.log('📧 [Resend] Sending. From:', fromEmail, '→ To:', options.email);
+                if (!resendFrom) {
+                    console.log('   ℹ️  Using test sender — email only arrives if recipient = your Resend account email.');
+                }
+
+                const res = await fetch('https://api.resend.com/emails', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${resendKey}`
+                    },
+                    body: JSON.stringify({
+                        from: fromEmail,
+                        to: [options.email],
+                        subject: options.subject,
+                        html: formattedHtml,
+                        text: options.message
+                    })
+                });
+
+                const data = await res.json();
+                if (res.ok) {
+                    console.log('✅ [Resend] Email sent! id:', data.id);
+                    return { success: true, message: 'Email sent successfully via Resend', messageId: data.id };
+                } else {
+                    console.warn('⚠️ [Resend] Error (status ' + res.status + '):', JSON.stringify(data, null, 2));
+                    if (data.message && data.message.includes('domain is not verified')) {
+                        console.warn('   → Fix: Do NOT set RESEND_FROM to a @gmail.com address. Use a domain you own, verified at https://resend.com/domains');
+                    }
+                    // Fall through to next provider
+                }
+            } catch (err) {
+                console.warn('⚠️ [Resend] Fetch failed:', err.message);
+            }
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // 3. SENDGRID — FALLBACK
+        // ─────────────────────────────────────────────────────────────────────
         if (sendgridKey) {
             try {
+                console.log('📧 [SendGrid] Sending → To:', options.email);
+
                 const res = await fetch('https://api.sendgrid.com/v3/mail/send', {
                     method: 'POST',
                     headers: {
@@ -117,21 +157,26 @@ const sendEmail = async (options) => {
                 });
 
                 if (res.ok) {
-                    console.log('✅ Email sent via SendGrid HTTP API');
-                    return { success: true, message: 'Email sent successfully via SendGrid API' };
+                    console.log('✅ [SendGrid] Email sent!');
+                    return { success: true, message: 'Email sent successfully via SendGrid' };
                 } else {
                     const data = await res.json();
-                    console.warn('⚠️ SendGrid HTTP API error:', data);
+                    console.warn('⚠️ [SendGrid] Error:', data);
                 }
             } catch (err) {
-                console.warn('⚠️ SendGrid fetch failed:', err.message);
+                console.warn('⚠️ [SendGrid] Fetch failed:', err.message);
             }
         }
 
-        // 4. Nodemailer SMTP Fallback (Works on Localhost / VPS, times out on Vercel)
+        // ─────────────────────────────────────────────────────────────────────
+        // 4. GMAIL SMTP — LOCAL ONLY (Vercel blocks outbound SMTP sockets)
+        //    Works on your machine / VPS. Will timeout on Vercel serverless.
+        // ─────────────────────────────────────────────────────────────────────
         if (!user || !pass) {
-            throw new Error('No HTTP Email API key (RESEND_API_KEY) or SMTP credentials (EMAIL_USER/EMAIL_PASS) set in environment variables');
+            throw new Error('No email provider configured. Set BREVO_API_KEY (recommended) or RESEND_API_KEY in your environment variables.');
         }
+
+        console.log('📧 [SMTP] Trying Gmail SMTP (local only — will fail on Vercel)...');
 
         const mailOptions = {
             from: `"AI Cold Email Generator" <${user}>`,
@@ -166,7 +211,6 @@ const sendEmail = async (options) => {
         ];
 
         let lastError = null;
-
         for (let i = 0; i < transportConfigs.length; i++) {
             try {
                 const transporter = nodemailer.createTransport({
@@ -176,15 +220,18 @@ const sendEmail = async (options) => {
                     socketTimeout: 5000
                 });
                 const info = await transporter.sendMail(mailOptions);
-                console.log(`✅ Email sent successfully using SMTP config #${i + 1}:`, info.response);
-                return { success: true, message: 'Email sent successfully', messageId: info.messageId };
+                console.log(`✅ [SMTP] Email sent via config #${i + 1}:`, info.response);
+                return { success: true, message: 'Email sent successfully via SMTP', messageId: info.messageId };
             } catch (err) {
-                console.warn(`⚠️ SMTP transport config #${i + 1} failed: ${err.message}`);
+                console.warn(`⚠️ [SMTP] Config #${i + 1} failed: ${err.message}`);
                 lastError = err;
             }
         }
 
-        throw new Error(`Vercel Serverless blocks direct SMTP sockets (smtp.gmail.com). Please add RESEND_API_KEY in Vercel Environment Variables to send emails via HTTP API. Original error: ${lastError ? lastError.message : 'Timeout'}`);
+        throw new Error(
+            `All email providers failed. On Vercel: set BREVO_API_KEY (verify sender at https://app.brevo.com/senders). ` +
+            `Last SMTP error: ${lastError ? lastError.message : 'Unknown'}`
+        );
 
     } catch (error) {
         console.error('❌ Email sending error:', error.message);
