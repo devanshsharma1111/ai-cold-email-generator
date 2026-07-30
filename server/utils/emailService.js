@@ -1,22 +1,20 @@
 const nodemailer = require('nodemailer');
+const dns = require('dns');
 
-const createTransporter = (config) => {
-    return nodemailer.createTransport({
-        ...config,
-        connectionTimeout: 6000,
-        greetingTimeout: 6000,
-        socketTimeout: 8000
-    });
-};
+// Force IPv4 lookup first to prevent Node 18+ IPv6 socket timeout on Vercel serverless
+if (dns.setDefaultResultOrder) {
+    try {
+        dns.setDefaultResultOrder('ipv4first');
+    } catch (e) {
+        // Ignore if already set
+    }
+}
 
 const sendEmail = async (options) => {
     try {
-        if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
-            throw new Error('Email credentials (EMAIL_USER / EMAIL_PASS) not configured in server environment');
-        }
-
         const user = process.env.EMAIL_USER;
         const pass = process.env.EMAIL_PASS;
+        const resendKey = process.env.RESEND_API_KEY;
 
         const otpMatch = options.message.match(/\d{6}/);
         const otpCode = otpMatch ? otpMatch[0] : '';
@@ -36,6 +34,41 @@ const sendEmail = async (options) => {
             </div>
         `;
 
+        // Option 1: HTTP API via Resend (instant 100ms delivery, no SMTP timeouts on Vercel)
+        if (resendKey) {
+            try {
+                const resendResponse = await fetch('https://api.resend.com/emails', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${resendKey}`
+                    },
+                    body: JSON.stringify({
+                        from: 'AI Cold Email Generator <onboarding@resend.dev>',
+                        to: [options.email],
+                        subject: options.subject,
+                        html: formattedHtml,
+                        text: options.message
+                    })
+                });
+
+                const resendData = await resendResponse.json();
+
+                if (resendResponse.ok) {
+                    console.log('✅ Email sent via Resend API:', resendData.id);
+                    return { success: true, message: 'Email sent successfully', messageId: resendData.id };
+                } else {
+                    console.warn('⚠️ Resend API error, falling back to SMTP:', resendData);
+                }
+            } catch (resendErr) {
+                console.warn('⚠️ Resend fetch failed, falling back to SMTP:', resendErr.message);
+            }
+        }
+
+        if (!user || !pass) {
+            throw new Error('Email credentials (EMAIL_USER / EMAIL_PASS) not configured in server environment');
+        }
+
         const mailOptions = {
             from: `"AI Cold Email Generator" <${user}>`,
             to: options.email,
@@ -44,24 +77,27 @@ const sendEmail = async (options) => {
             html: formattedHtml
         };
 
-        // Try Port 587 (STARTTLS) first, then Port 465 (SSL), then service 'gmail'
+        // Option 2: IPv4-forced SMTP transports
         const transportConfigs = [
+            {
+                host: 'smtp.gmail.com',
+                port: 465,
+                secure: true,
+                family: 4,
+                auth: { user, pass }
+            },
             {
                 host: 'smtp.gmail.com',
                 port: 587,
                 secure: false,
                 requireTLS: true,
+                family: 4,
                 auth: { user, pass },
                 tls: { rejectUnauthorized: false }
             },
             {
-                host: 'smtp.gmail.com',
-                port: 465,
-                secure: true,
-                auth: { user, pass }
-            },
-            {
                 service: 'gmail',
+                family: 4,
                 auth: { user, pass }
             }
         ];
@@ -70,9 +106,14 @@ const sendEmail = async (options) => {
 
         for (let i = 0; i < transportConfigs.length; i++) {
             try {
-                const transporter = createTransporter(transportConfigs[i]);
+                const transporter = nodemailer.createTransport({
+                    ...transportConfigs[i],
+                    connectionTimeout: 5000,
+                    greetingTimeout: 5000,
+                    socketTimeout: 7000
+                });
                 const info = await transporter.sendMail(mailOptions);
-                console.log(`✅ Email sent successfully using config #${i + 1}:`, info.response);
+                console.log(`✅ Email sent successfully using IPv4 SMTP config #${i + 1}:`, info.response);
                 return { success: true, message: 'Email sent successfully', messageId: info.messageId };
             } catch (err) {
                 console.warn(`⚠️ SMTP transport config #${i + 1} failed: ${err.message}`);
@@ -80,7 +121,7 @@ const sendEmail = async (options) => {
             }
         }
 
-        throw lastError || new Error('All SMTP transport connection attempts failed');
+        throw lastError || new Error('All SMTP connection attempts timed out');
 
     } catch (error) {
         console.error('❌ Email sending error:', error.message);
