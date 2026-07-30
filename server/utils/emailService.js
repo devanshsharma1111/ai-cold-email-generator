@@ -1,7 +1,7 @@
 const nodemailer = require('nodemailer');
 const dns = require('dns');
 
-// Force IPv4 lookup first to prevent Node 18+ IPv6 socket timeout on Vercel serverless
+// Force IPv4 lookup first for local/VPS SMTP
 if (dns.setDefaultResultOrder) {
     try {
         dns.setDefaultResultOrder('ipv4first');
@@ -15,6 +15,8 @@ const sendEmail = async (options) => {
         const user = process.env.EMAIL_USER;
         const pass = process.env.EMAIL_PASS;
         const resendKey = process.env.RESEND_API_KEY;
+        const brevoKey = process.env.BREVO_API_KEY;
+        const sendgridKey = process.env.SENDGRID_API_KEY;
 
         const otpMatch = options.message.match(/\d{6}/);
         const otpCode = otpMatch ? otpMatch[0] : '';
@@ -34,10 +36,10 @@ const sendEmail = async (options) => {
             </div>
         `;
 
-        // Option 1: HTTP API via Resend (instant 100ms delivery, no SMTP timeouts on Vercel)
+        // 1. Resend HTTP API (Best for Vercel - uses HTTPS Port 443, never times out)
         if (resendKey) {
             try {
-                const resendResponse = await fetch('https://api.resend.com/emails', {
+                const res = await fetch('https://api.resend.com/emails', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -52,21 +54,83 @@ const sendEmail = async (options) => {
                     })
                 });
 
-                const resendData = await resendResponse.json();
-
-                if (resendResponse.ok) {
-                    console.log('✅ Email sent via Resend API:', resendData.id);
-                    return { success: true, message: 'Email sent successfully', messageId: resendData.id };
+                const data = await res.json();
+                if (res.ok) {
+                    console.log('✅ Email sent via Resend HTTP API:', data.id);
+                    return { success: true, message: 'Email sent successfully via Resend API', messageId: data.id };
                 } else {
-                    console.warn('⚠️ Resend API error, falling back to SMTP:', resendData);
+                    console.warn('⚠️ Resend HTTP API error:', data);
                 }
-            } catch (resendErr) {
-                console.warn('⚠️ Resend fetch failed, falling back to SMTP:', resendErr.message);
+            } catch (err) {
+                console.warn('⚠️ Resend fetch failed:', err.message);
             }
         }
 
+        // 2. Brevo HTTP API
+        if (brevoKey) {
+            try {
+                const res = await fetch('https://api.brevo.com/v3/smtp/email', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'api-key': brevoKey
+                    },
+                    body: JSON.stringify({
+                        sender: { name: 'AI Cold Email Generator', email: user || 'no-reply@aicoldemail.com' },
+                        to: [{ email: options.email }],
+                        subject: options.subject,
+                        htmlContent: formattedHtml,
+                        textContent: options.message
+                    })
+                });
+
+                const data = await res.json();
+                if (res.ok) {
+                    console.log('✅ Email sent via Brevo HTTP API:', data.messageId);
+                    return { success: true, message: 'Email sent successfully via Brevo API', messageId: data.messageId };
+                } else {
+                    console.warn('⚠️ Brevo HTTP API error:', data);
+                }
+            } catch (err) {
+                console.warn('⚠️ Brevo fetch failed:', err.message);
+            }
+        }
+
+        // 3. SendGrid HTTP API
+        if (sendgridKey) {
+            try {
+                const res = await fetch('https://api.sendgrid.com/v3/mail/send', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${sendgridKey}`
+                    },
+                    body: JSON.stringify({
+                        personalizations: [{ to: [{ email: options.email }] }],
+                        from: { email: user || 'no-reply@aicoldemail.com', name: 'AI Cold Email Generator' },
+                        subject: options.subject,
+                        content: [
+                            { type: 'text/plain', value: options.message },
+                            { type: 'text/html', value: formattedHtml }
+                        ]
+                    })
+                });
+
+                if (res.ok) {
+                    console.log('✅ Email sent via SendGrid HTTP API');
+                    return { success: true, message: 'Email sent successfully via SendGrid API' };
+                } else {
+                    const data = await res.json();
+                    console.warn('⚠️ SendGrid HTTP API error:', data);
+                }
+            } catch (err) {
+                console.warn('⚠️ SendGrid fetch failed:', err.message);
+            }
+        }
+
+        // 4. Nodemailer SMTP Fallback (Works on Localhost / VPS, times out on Vercel)
         if (!user || !pass) {
-            throw new Error('Email credentials (EMAIL_USER / EMAIL_PASS) not configured in server environment');
+            throw new Error('No HTTP Email API key (RESEND_API_KEY) or SMTP credentials (EMAIL_USER/EMAIL_PASS) set in environment variables');
         }
 
         const mailOptions = {
@@ -77,7 +141,6 @@ const sendEmail = async (options) => {
             html: formattedHtml
         };
 
-        // Option 2: IPv4-forced SMTP transports
         const transportConfigs = [
             {
                 host: 'smtp.gmail.com',
@@ -108,12 +171,12 @@ const sendEmail = async (options) => {
             try {
                 const transporter = nodemailer.createTransport({
                     ...transportConfigs[i],
-                    connectionTimeout: 5000,
-                    greetingTimeout: 5000,
-                    socketTimeout: 7000
+                    connectionTimeout: 4000,
+                    greetingTimeout: 4000,
+                    socketTimeout: 5000
                 });
                 const info = await transporter.sendMail(mailOptions);
-                console.log(`✅ Email sent successfully using IPv4 SMTP config #${i + 1}:`, info.response);
+                console.log(`✅ Email sent successfully using SMTP config #${i + 1}:`, info.response);
                 return { success: true, message: 'Email sent successfully', messageId: info.messageId };
             } catch (err) {
                 console.warn(`⚠️ SMTP transport config #${i + 1} failed: ${err.message}`);
@@ -121,11 +184,11 @@ const sendEmail = async (options) => {
             }
         }
 
-        throw lastError || new Error('All SMTP connection attempts timed out');
+        throw new Error(`Vercel Serverless blocks direct SMTP sockets (smtp.gmail.com). Please add RESEND_API_KEY in Vercel Environment Variables to send emails via HTTP API. Original error: ${lastError ? lastError.message : 'Timeout'}`);
 
     } catch (error) {
         console.error('❌ Email sending error:', error.message);
-        throw new Error(`Failed to send email: ${error.message}`);
+        throw error;
     }
 };
 
